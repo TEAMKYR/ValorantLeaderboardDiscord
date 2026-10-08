@@ -299,3 +299,54 @@ async def test_daily_leaderboard_schedule(config: Config):
             pass
 
 
+@pytest.mark.asyncio
+async def test_act_auto_rollover():
+    """Verify that when ACT_ID is 'auto', the bot dynamically resolves active Act and detects rollovers."""
+    if os.path.exists(TEST_DB_PATH):
+        os.remove(TEST_DB_PATH)
+
+    db = Database(TEST_DB_PATH)
+    await db.init_db()
+
+    auto_config = Config(
+        discord_token="fake_token",
+        riot_api_key="fake_key",
+        act_id="auto",
+        val_region="na",
+        routing_region="americas",
+        sync_interval_minutes=15,
+        min_matches=1,
+        db_path=TEST_DB_PATH,
+    )
+
+    mock_riot = MagicMock(spec=RiotClient)
+    # Start on Act V
+    mock_riot.get_active_act = AsyncMock(return_value=("act-uuid-v", "ACT V"))
+
+    mock_bot = MagicMock()
+    mock_bot.wait_until_ready = AsyncMock()
+
+    cog = TrackerCog(bot=mock_bot, db=db, riot_client=mock_riot, config=auto_config)
+    cog.sync_loop.cancel()
+    cog.daily_post_loop.cancel()
+
+    # Initial refresh
+    act_id = await cog._refresh_act_id()
+    assert act_id == "act-uuid-v"
+    assert cog.active_act_name == "ACT V"
+
+    # Simulate rollover to Act VI
+    mock_riot.get_active_act = AsyncMock(return_value=("act-uuid-vi", "ACT VI"))
+    new_act_id = await cog._refresh_act_id()
+    assert new_act_id == "act-uuid-vi"
+    assert cog.active_act_name == "ACT VI"
+
+    # Clean up
+    if os.path.exists(TEST_DB_PATH):
+        try:
+            os.remove(TEST_DB_PATH)
+        except PermissionError:
+            pass
+
+
+

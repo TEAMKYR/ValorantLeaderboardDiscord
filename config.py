@@ -28,7 +28,7 @@ class Config:
 
         token = os.getenv("DISCORD_BOT_TOKEN", "").strip()
         riot_key = os.getenv("RIOT_API_KEY", "").strip()
-        act_id = os.getenv("ACT_ID", "").strip()
+        act_id = os.getenv("ACT_ID", "auto").strip() or "auto"
         val_region = os.getenv("VAL_REGION", "na").strip().lower()
         routing_region = os.getenv("ROUTING_REGION", "americas").strip().lower()
 
@@ -64,8 +64,6 @@ class Config:
             missing.append("DISCORD_BOT_TOKEN")
         if not self.riot_api_key:
             missing.append("RIOT_API_KEY")
-        if not self.act_id:
-            missing.append("ACT_ID")
 
         if missing:
             raise ValueError(

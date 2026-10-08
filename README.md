@@ -68,8 +68,9 @@ DISCORD_BOT_TOKEN=your_discord_bot_token_here
 RIOT_API_KEY=RGAPI-your-api-key-here
 
 # Target VALORANT Act / Season UUID
-# (Inspect via Riot val-content API or tracker sites for current Act)
-ACT_ID=a16955a5-4ad0-f761-5e9e-38a649b0ff4f
+# Set to 'auto' (default & recommended) for zero-maintenance auto-detection and rollover.
+# Or specify an explicit Act UUID to lock to a specific season.
+ACT_ID=auto
 
 # Regional Match Endpoint: na, eu, ap, kr, latam, br
 VAL_REGION=na

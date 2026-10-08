@@ -29,6 +29,8 @@ class TrackerCog(commands.Cog):
         self.config = config
         self._sync_lock = asyncio.Lock()
         self.last_sync_time: Optional[float] = None
+        self.active_act_id: str = self.config.act_id
+        self.active_act_name: str = "Active Act"
 
         # Start the background synchronization loop
         self.sync_loop.change_interval(minutes=self.config.sync_interval_minutes)
@@ -41,6 +43,27 @@ class TrackerCog(commands.Cog):
         """Cancel background tasks on unload."""
         self.sync_loop.cancel()
         self.daily_post_loop.cancel()
+
+    async def _refresh_act_id(self) -> str:
+        """Dynamically detects active Act ID if configured to 'auto' or updates display name."""
+        if self.config.act_id.lower() != "auto":
+            self.active_act_id = self.config.act_id
+            return self.active_act_id
+
+        resolved_id, resolved_name = await self.riot_client.get_active_act(self.config.val_region)
+        if resolved_id:
+            if resolved_id != self.active_act_id and self.active_act_id != "auto":
+                logger.info(
+                    "🔄 VALORANT Act rollover detected! Switched from %s to %s (%s)",
+                    self.active_act_id,
+                    resolved_id,
+                    resolved_name,
+                )
+            self.active_act_id = resolved_id
+            self.active_act_name = resolved_name or "Active Act"
+        elif self.active_act_id == "auto":
+            logger.warning("Could not automatically resolve active Act ID. Retrying later.")
+        return self.active_act_id
 
     # ==========================================
     # BACKGROUND SYNC ENGINE
@@ -59,6 +82,7 @@ class TrackerCog(commands.Cog):
     async def before_sync_loop(self) -> None:
         """Wait until the bot is completely ready before running the loop."""
         await self.bot.wait_until_ready()
+        await self._refresh_act_id()
 
     async def _run_sync(self, target_puuid: Optional[str] = None) -> Dict[str, int]:
         """Core sync procedure. Protected by an asyncio Lock to prevent overlapping runs."""
@@ -69,6 +93,7 @@ class TrackerCog(commands.Cog):
         async with self._sync_lock:
             start_time = time.monotonic()
             stats = {"players_synced": 0, "matches_ingested": 0}
+            target_act_id = await self._refresh_act_id()
 
             if target_puuid:
                 player = await self.db.get_player_by_puuid(target_puuid)
@@ -125,9 +150,9 @@ class TrackerCog(commands.Cog):
                         game_start_millis = match_info.get("gameStartTimeMillis", int(time.time() * 1000))
                         game_start_time = int(game_start_millis / 1000)
 
-                        # Verify Act / Season ID matches configured target ACT_ID
-                        if season_id != self.config.act_id:
-                            logger.debug("Match %s seasonId '%s' != target '%s'. Skipping.", match_id, season_id, self.config.act_id)
+                        # Verify Act / Season ID matches active target Act ID
+                        if season_id != target_act_id:
+                            logger.debug("Match %s seasonId '%s' != target '%s'. Skipping.", match_id, season_id, target_act_id)
                             continue
 
                         # Filter strictly to competitive queue
@@ -182,9 +207,11 @@ class TrackerCog(commands.Cog):
 
     async def _build_leaderboard_embed(self, is_avg: bool, guild_id: Optional[int] = None) -> discord.Embed:
         """Constructs a formatted Discord embed for summative or average leaderboards, optionally filtered by server."""
+        target_act_id = await self._refresh_act_id()
+
         if is_avg:
             records = await self.db.get_average_leaderboard(
-                season_id=self.config.act_id,
+                season_id=target_act_id,
                 guild_id=guild_id,
                 min_matches=self.config.min_matches,
                 limit=25
@@ -193,19 +220,25 @@ class TrackerCog(commands.Cog):
             score_col_name = "Avg Score"
         else:
             records = await self.db.get_summative_leaderboard(
-                season_id=self.config.act_id,
+                season_id=target_act_id,
                 guild_id=guild_id,
                 limit=25
             )
             metric_title = "Summative Performance Score (Cumulative)"
             score_col_name = "Total Score"
 
+        act_label = (
+            f"**Competitive Act:** `{self.active_act_name}` (`{target_act_id[:8]}...`)"
+            if target_act_id != "auto"
+            else f"**Competitive Act:** `{self.active_act_name}`"
+        )
+
         # Modern aesthetic embed with VALORANT Crimson palette
         embed = discord.Embed(
             title=f"🏆 VALORANT Leaderboard — {metric_title}",
             color=0xFD4556,  # Riot VALORANT Crimson
             description=(
-                f"**Target Act ID:** `{self.config.act_id}`\n"
+                f"{act_label}\n"
                 f"**Queue:** `Competitive`\n"
                 + (f"*(Min matches required: {self.config.min_matches})*\n" if is_avg else "")
             ),

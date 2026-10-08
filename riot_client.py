@@ -5,7 +5,7 @@ import logging
 import random
 import time
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import aiohttp
 
 logger = logging.getLogger("RiotClient")
@@ -230,3 +230,57 @@ class RiotClient:
                 pass
 
         return None
+
+    async def get_active_act(
+        self, val_region: str = "na"
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Resolves the current active VALORANT Act UUID and display name.
+
+        First attempts Riot's official /val/content/v1/contents endpoint.
+        Falls back to valorant-api.com seasons database if needed.
+        Returns a tuple of (act_uuid, display_name).
+        """
+        import datetime
+
+        # 1. Official Riot endpoint
+        try:
+            content_url = f"https://{val_region}.api.riotgames.com/val/content/v1/contents"
+            content = await self._request(content_url)
+            if content and "seasons" in content:
+                for season in content["seasons"]:
+                    is_active = season.get("isActive", False)
+                    s_type = str(season.get("type", "")).lower()
+                    if is_active and s_type == "act":
+                        act_id = season.get("id")
+                        act_name = season.get("name", "Current Act")
+                        if act_id:
+                            logger.info("Auto-detected active Act from Riot API: %s (%s)", act_name, act_id)
+                            return act_id, act_name
+        except Exception as exc:
+            logger.warning("Could not fetch active season from Riot content API: %s. Trying fallback.", exc)
+
+        # 2. Public valorant-api.com fallback
+        try:
+            session = await self._get_session()
+            async with session.get("https://valorant-api.com/v1/seasons") as resp:
+                if resp.status == 200:
+                    payload = await resp.json()
+                    seasons = payload.get("data", [])
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    for s in seasons:
+                        if s.get("type") == "EAresSeasonType::Act" and s.get("startTime") and s.get("endTime"):
+                            try:
+                                s_start = datetime.datetime.fromisoformat(s["startTime"].replace("Z", "+00:00"))
+                                s_end = datetime.datetime.fromisoformat(s["endTime"].replace("Z", "+00:00"))
+                                if s_start <= now <= s_end:
+                                    act_id = s.get("uuid")
+                                    act_name = s.get("displayName", "Current Act")
+                                    if act_id:
+                                        logger.info("Auto-detected active Act from valorant-api.com: %s (%s)", act_name, act_id)
+                                        return act_id, act_name
+                            except (ValueError, TypeError):
+                                continue
+        except Exception as fallback_exc:
+            logger.error("Failed to fetch active Act from fallback endpoint: %s", fallback_exc)
+
+        return None, None
